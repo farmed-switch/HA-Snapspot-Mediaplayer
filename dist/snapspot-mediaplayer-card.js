@@ -71,14 +71,15 @@
   // Resolve DAC entity: explicit config > auto-detect _dac > auto-detect _enable_dac > null
   _dacEntityId() {
     if (!this._hass || !this._activeId) return null;
+    // 1. Explicit config override always wins
     if (this._config?.dac_switch && this._hass.states[this._config.dac_switch])
       return this._config.dac_switch;
-    const pr = this._prefix(this._activeId);
-    for (const suffix of ['_dac', '_enable_dac']) {
-      const eid = `switch.${pr}${suffix}`;
-      if (this._hass.states[eid]) return eid;
-    }
-    return null;
+    // 2. Scan all switch entities that start with switch.{prefix}_ and contain 'dac'
+    //    — same approach as _dspScanBands so long/doubled prefixes are handled correctly
+    const pfx = `switch.${this._prefix(this._activeId)}_`;
+    const hit = Object.keys(this._hass.states)
+      .find(eid => eid.startsWith(pfx) && /dac/i.test(eid));
+    return hit || null;
   }
 
   _prefix(id) {
