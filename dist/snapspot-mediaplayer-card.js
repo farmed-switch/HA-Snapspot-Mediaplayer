@@ -7,7 +7,7 @@
     this._activeId  = null;
     this._bgColor   = null;
     this._lastArt   = null;
-    this._cardH     = 160;
+    this._cardH     = 200;
     this._resizeObs = null;
   }
 
@@ -122,7 +122,7 @@
     this.shadowRoot.innerHTML = `
       <style>
         :host { display: block; }
-        ha-card { overflow: hidden; position: relative; min-height: 160px; }
+        ha-card { overflow: hidden; position: relative; min-height: 200px; }
 
         /* Background layers */
         .bg-color {
@@ -146,7 +146,7 @@
         .player {
           position: relative; z-index: 1;
           padding: 14px 16px 10px;
-          min-height: 160px;
+          min-height: 200px;
           box-sizing: border-box;
           display: flex;
           flex-direction: column;
