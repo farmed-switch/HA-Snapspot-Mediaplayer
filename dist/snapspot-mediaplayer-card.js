@@ -259,9 +259,10 @@
         /* ── DSP / EQ section ──────────────────────────────────── */
         #dspSection {
           position: relative; z-index: 1; display: none;
-          background: #1c1c1c;
+          background: #1c1c1c; /* overridden via style when artwork color is available */
           border-top: 1px solid rgba(128,128,128,0.25);
           padding: 10px 12px 12px;
+          transition: background 0.8s;
         }
         #dspSection.visible { display: block; }
         .dsp-header {
@@ -405,6 +406,7 @@
     const bgImage = this.shadowRoot.querySelector('#bgImage');
     const bgGrad  = this.shadowRoot.querySelector('#bgGradient');
     if (!bgColor) return;
+    const dspSec = this.shadowRoot.querySelector('#dspSection');
     const hasArt = artUrl && artUrl !== 'unavailable' && artUrl !== 'unknown';
     const col = color || 'rgb(26,26,26)';
     if (hasArt) {
@@ -425,10 +427,12 @@
       bgGrad.style.background        = `linear-gradient(to right, ${cFull} 0%, ${cMid} 55%, ${cNone} 100%)`;
       bgGrad.style.width             = this._cardH + 'px';
       bgGrad.style.opacity           = '1';
+      if (dspSec) dspSec.style.background = col;
     } else {
       bgColor.style.background = 'transparent';
       bgImage.style.opacity    = '0';
       bgGrad.style.opacity     = '0';
+      if (dspSec) dspSec.style.background = '';
     }
   }
 
@@ -666,11 +670,15 @@
       const selEid = `select.${pr}_dsp`;
       const swEid  = `switch.${pr}_software_eq`;
       if (this._hass.states[selEid]) {
-        const st  = this._hass.states[selEid];
-        const isOn = st.state && st.state !== 'Disabled' && st.state !== 'unavailable' && st.state !== 'unknown';
+        const st      = this._hass.states[selEid];
+        const offRe   = /^(off|disabled|none)$/i;
+        const isOn    = st.state && !offRe.test(st.state) && st.state !== 'unavailable' && st.state !== 'unknown';
+        const opts    = st.attributes?.options || [];
+        const offOpt  = opts.find(o => offRe.test(o))  || 'Off';
+        const onOpt   = opts.find(o => !offRe.test(o)) || st.state;
         this._hass.callService('select', 'select_option', {
           entity_id: selEid,
-          option: isOn ? 'Disabled' : (st.attributes?.options?.find(o => o !== 'Disabled') || st.state),
+          option: isOn ? offOpt : onOpt,
         });
       } else if (this._hass.states[swEid]) {
         this._hass.callService('homeassistant', 'toggle', { entity_id: swEid });
@@ -699,7 +707,8 @@
     const hwSt  = this._hass.states[`select.${prefix}_dsp`];
     const swSt  = this._hass.states[`switch.${prefix}_software_eq`];
     let dspOn = false;
-    if (hwSt)  dspOn = hwSt.state && hwSt.state !== 'Disabled' && hwSt.state !== 'unavailable' && hwSt.state !== 'unknown';
+    const offRe = /^(off|disabled|none)$/i;
+    if (hwSt)  dspOn = hwSt.state && !offRe.test(hwSt.state) && hwSt.state !== 'unavailable' && hwSt.state !== 'unknown';
     else if (swSt) dspOn = swSt.state === 'on';
     this.shadowRoot.querySelector('#dspHwEq')?.classList.toggle('on', !!dspOn);
 
