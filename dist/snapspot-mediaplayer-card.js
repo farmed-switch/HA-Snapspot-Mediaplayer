@@ -256,7 +256,7 @@ class SnapspotMediaplayerCard extends HTMLElement {
   // ── Update (on every hass change) ───────────────────────────────────────
   _update() {
     if (!this._config || !this._hass) return;
-    const root = this.shadowRoot && this.shadowRoot.getElementById('root');
+    const root = this.shadowRoot && this.shadowRoot.querySelector('#root');
     if (!root) return;
 
     const mpId    = this._config.media_player;
@@ -367,15 +367,15 @@ class SnapspotMediaplayerCard extends HTMLElement {
     // ── Wire up events ──────────────────────────────────────────────────────
     const id = this._config.media_player;
 
-    root.getElementById('btnPlayPause')?.addEventListener('click', () => {
+    root.querySelector('#btnPlayPause')?.addEventListener('click', () => {
       this._hass.callService('media_player', isPlaying ? 'media_pause' : 'media_play', { entity_id: id });
     });
 
-    root.getElementById('btnMute')?.addEventListener('click', () => {
+    root.querySelector('#btnMute')?.addEventListener('click', () => {
       this._hass.callService('media_player', 'volume_mute', { entity_id: id, is_volume_muted: !isMuted });
     });
 
-    const slider = root.getElementById('volSlider');
+    const slider = root.querySelector('#volSlider');
     if (slider) {
       slider.addEventListener('input', (e) => {
         const val = parseInt(e.target.value, 10);
