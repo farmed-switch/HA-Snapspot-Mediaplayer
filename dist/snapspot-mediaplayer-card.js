@@ -263,18 +263,66 @@
   _extractArtColor(imgUrl, callback) {
     if (!imgUrl) { callback(null); return; }
     const img = new Image();
+    img.crossOrigin = 'anonymous';
     img.onload = () => {
       try {
+        // Downsample to 80x80 — enough resolution without being slow
+        const SIZE = 80;
         const c = document.createElement('canvas');
-        c.width = 50; c.height = 50;
+        c.width = SIZE; c.height = SIZE;
         const ctx = c.getContext('2d');
-        ctx.drawImage(img, 0, 0, 50, 50);
-        const d = ctx.getImageData(0, 0, 50, 50).data;
-        let r = 0, g = 0, b = 0, n = 0;
-        for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i+1]; b += d[i+2]; n++; }
-        const f = 0.52 / n;
-        callback('rgb(' + Math.round(r*f) + ',' + Math.round(g*f) + ',' + Math.round(b*f) + ')');
-      } catch(e) { callback(null); }
+        ctx.drawImage(img, 0, 0, SIZE, SIZE);
+        const d = ctx.getImageData(0, 0, SIZE, SIZE).data;
+
+        // HSL bucketing — same principle as node-vibrant used by HA.
+        // Sort pixels by hue (12 × 30° buckets), weight by saturation.
+        // Skip near-black, near-white, and near-grey pixels.
+        const HUE_BUCKETS = 12;
+        const buckets = new Array(HUE_BUCKETS).fill(null).map(() => ({ r:0, g:0, b:0, w:0 }));
+
+        for (let i = 0; i < d.length; i += 4) {
+          const r = d[i] / 255, g = d[i+1] / 255, b = d[i+2] / 255;
+          const max = Math.max(r,g,b), min = Math.min(r,g,b);
+          const l = (max + min) / 2;
+          if (l < 0.08 || l > 0.93) continue;          // skip very dark / very light
+          const delta = max - min;
+          if (delta < 0.12) continue;                   // skip near-grey
+          const s = delta / (1 - Math.abs(2*l - 1));
+          if (s < 0.25) continue;                       // skip low-saturation
+
+          // Hue 0–360°
+          let h;
+          if (max === r)      h = ((g - b) / delta) % 6;
+          else if (max === g) h = (b - r) / delta + 2;
+          else                h = (r - g) / delta + 4;
+          h = ((h * 60) + 360) % 360;
+
+          const bi = Math.floor(h / (360 / HUE_BUCKETS)) % HUE_BUCKETS;
+          const weight = s * (1 - Math.abs(2*l - 1)); // saturation × inverted-L-peak
+          buckets[bi].r += d[i]   * weight;
+          buckets[bi].g += d[i+1] * weight;
+          buckets[bi].b += d[i+2] * weight;
+          buckets[bi].w += weight;
+        }
+
+        // Pick the most populated / vibrant bucket
+        const best = buckets.reduce((a, b) => b.w > a.w ? b : a);
+        if (best.w < 1) { callback(null); return; }    // no vibrant pixels found
+
+        // Weighted average RGB for this hue bucket — then darken to ~L 0.28
+        // (matches HA's media-control-card aesthetic)
+        let br = best.r / best.w, bg2 = best.g / best.w, bb = best.b / best.w;
+        const maxC = Math.max(br,bg2,bb);
+        if (maxC > 0) {
+          const target = 71; // target max channel ≈ L 0.28
+          const scale = Math.min(1, target / maxC);
+          br *= scale; bg2 *= scale; bb *= scale;
+        }
+        callback('rgb(' + Math.round(br) + ',' + Math.round(bg2) + ',' + Math.round(bb) + ')');
+      } catch(e) {
+        // Canvas tainted (CORS) — fall back silently
+        callback(null);
+      }
     };
     img.onerror = () => callback(null);
     img.src = imgUrl;
