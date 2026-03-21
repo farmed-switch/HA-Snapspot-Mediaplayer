@@ -2,14 +2,19 @@
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
-    this._config    = null;
-    this._hass      = null;
-    this._activeId  = null;
-    this._bgColor   = null;
-    this._lastArt   = null;
-    this._cardH     = 200;
-    this._resizeObs = null;
-    this._dspCard   = null;
+    this._config     = null;
+    this._hass       = null;
+    this._activeId   = null;
+    this._bgColor    = null;
+    this._lastArt    = null;
+    this._cardH      = 200;
+    this._resizeObs  = null;
+    // DSP / EQ canvas state
+    this._dspCanvas  = null;
+    this._dspCtx     = null;
+    this._dspBands   = [];
+    this._dspDragging = null;
+    this._dspEditMode = false;
   }
 
   connectedCallback() {
@@ -90,9 +95,10 @@
   }
 
   setConfig(config) {
-    this._config   = config;
-    this._activeId = config.media_player || null;
-    this._dspCard  = null;   // reset so it is recreated on next _update()
+    this._config    = config;
+    this._activeId  = config.media_player || null;
+    this._dspCanvas = null; // force re-init after re-render
+    this._dspCtx    = null;
     this._render();
   }
 
@@ -247,22 +253,64 @@
           color: var(--secondary-text-color,#888); position: relative; z-index: 1;
         }
 
-        /* DSP section separator */
+        /* ── DSP / EQ section ──────────────────────────────────── */
         #dspSection {
-          position: relative; z-index: 1;
-          border-top: 1px solid rgba(128,128,128,0.2);
+          position: relative; z-index: 1; display: none;
+          background: #1c1c1c;
+          border-top: 1px solid rgba(128,128,128,0.25);
+          padding: 10px 12px 12px;
         }
-        #dspSection:empty { display: none; }
-        #dspSection dsp-controller-card {
-          display: block;
+        #dspSection.visible { display: block; }
+        .dsp-header {
+          display: flex; align-items: center; justify-content: space-between;
+          margin-bottom: 8px;
         }
+        .dsp-title {
+          font-size: 10px; font-weight: 700; letter-spacing: 0.09em;
+          text-transform: uppercase; color: #888;
+        }
+        .dsp-switches { display: flex; gap: 10px; align-items: center; }
+        .dsp-sw-wrap  { display: flex; align-items: center; gap: 5px; }
+        .dsp-sw-label { font-size: 10px; color: #888; white-space: nowrap; }
+        .dsp-toggle {
+          position: relative; width: 32px; height: 18px;
+          background: #4a4a4a; border-radius: 9px; cursor: pointer;
+          transition: background 0.2s; flex-shrink: 0;
+        }
+        .dsp-toggle.on { background: #22ba00; }
+        .dsp-toggle::after {
+          content: ''; position: absolute;
+          width: 14px; height: 14px; border-radius: 50%;
+          background: #fff; top: 2px; left: 2px; transition: left 0.2s;
+        }
+        .dsp-toggle.on::after { left: 16px; }
+        .dsp-canvas-wrap {
+          width: 100%; height: 180px;
+          user-select: none; touch-action: none;
+        }
+        .dsp-canvas-wrap canvas { width: 100%; height: 100%; display: block; }
       </style>
       <ha-card>
         <div class="bg-color" id="bgColor"></div>
         <div class="bg-image" id="bgImage"></div>
         <div class="bg-gradient" id="bgGradient"></div>
         <div id="root"></div>
-        <div id="dspSection"></div>
+        <div id="dspSection">
+          <div class="dsp-header">
+            <span class="dsp-title">Equalizer</span>
+            <div class="dsp-switches">
+              <div class="dsp-sw-wrap">
+                <span class="dsp-sw-label">SW EQ</span>
+                <div class="dsp-toggle" id="dspSwEq"></div>
+              </div>
+              <div class="dsp-sw-wrap">
+                <span class="dsp-sw-label">Edit</span>
+                <div class="dsp-toggle" id="dspEdit"></div>
+              </div>
+            </div>
+          </div>
+          <div class="dsp-canvas-wrap"><canvas id="dspCanvas"></canvas></div>
+        </div>
       </ha-card>
     `;
     this._attachObserver();
@@ -540,35 +588,193 @@
       });
     }
 
-    // ── DSP section ───────────────────────────────────────────────────────
-    const dspSection = this.shadowRoot.querySelector('#dspSection');
-    if (dspSection) {
-      if (this._config?.show_dsp) {
-        if (!this._dspCard) {
-          // Instantiate dsp-controller-card — entities wired in next step.
-          // Falls back gracefully (empty curve) if not yet registered.
-          const el = document.createElement('dsp-controller-card');
-          try {
-            el.setConfig({
-              title: 'EQ',
-              entities: [],
-              height: 220,
-              min: -15,
-              max: 15,
-            });
-          } catch(e) { /* card not loaded yet */ }
-          dspSection.appendChild(el);
-          this._dspCard = el;
-        }
-        this._dspCard.hass = this._hass;
-      } else {
-        if (this._dspCard) {
-          dspSection.innerHTML = '';
-          this._dspCard = null;
-        }
+    this._dspUpdate();
+  }
+
+  // ── DSP / EQ integrated canvas ────────────────────────────────────────────
+
+  _dspFreqs()    { return [25,40,63,100,160,250,400,630,1000,1600,2500,4000,6300,10000,16000]; }
+  _dspEntityIds(prefix) { return this._dspFreqs().map((_,i) => `number.${prefix}_eq_band_${i}`); }
+
+  _dspInit() {
+    // Idempotent — run once per render cycle
+    const canvas = this.shadowRoot && this.shadowRoot.querySelector('#dspCanvas');
+    if (!canvas || this._dspCanvas === canvas) return;
+    this._dspCanvas = canvas;
+    this._dspCtx    = canvas.getContext('2d');
+
+    canvas.addEventListener('mousedown',  this._dspPtrDown.bind(this));
+    canvas.addEventListener('mousemove',  this._dspPtrMove.bind(this));
+    canvas.addEventListener('mouseup',    this._dspPtrUp.bind(this));
+    canvas.addEventListener('mouseleave', this._dspPtrUp.bind(this));
+    canvas.addEventListener('touchstart', this._dspPtrDown.bind(this), { passive: false });
+    canvas.addEventListener('touchmove',  this._dspPtrMove.bind(this), { passive: false });
+    canvas.addEventListener('touchend',   this._dspPtrUp.bind(this));
+
+    this.shadowRoot.querySelector('#dspEdit')?.addEventListener('click', () => {
+      this._dspEditMode = !this._dspEditMode;
+      this.shadowRoot.querySelector('#dspEdit')?.classList.toggle('on', this._dspEditMode);
+      canvas.style.cursor = this._dspEditMode ? 'pointer' : 'default';
+    });
+
+    this.shadowRoot.querySelector('#dspSwEq')?.addEventListener('click', () => {
+      if (!this._hass || !this._activeId) return;
+      const eid = `switch.${this._prefix(this._activeId)}_software_eq`;
+      if (this._hass.states[eid]) this._hass.callService('homeassistant', 'toggle', { entity_id: eid });
+    });
+  }
+
+  _dspUpdate() {
+    const sec = this.shadowRoot && this.shadowRoot.querySelector('#dspSection');
+    if (!sec) return;
+    const show = !!this._config?.show_dsp;
+    sec.classList.toggle('visible', show);
+    if (!show || !this._activeId || !this._hass) return;
+
+    this._dspInit();
+    if (!this._dspCanvas) return;
+
+    const prefix  = this._prefix(this._activeId);
+    const freqs   = this._dspFreqs();
+    this._dspBands = this._dspEntityIds(prefix).map((eid, i) => {
+      const st = this._hass.states[eid];
+      return st ? { entityId: eid, value: parseFloat(st.state) || 0, freq: freqs[i] } : null;
+    }).filter(Boolean);
+
+    // SW EQ toggle state
+    const swEqSt = this._hass.states[`switch.${prefix}_software_eq`];
+    this.shadowRoot.querySelector('#dspSwEq')?.classList.toggle('on', swEqSt?.state === 'on');
+
+    // Size canvas to pixel dimensions (run every update — cheap if already right)
+    const rect = this._dspCanvas.getBoundingClientRect();
+    if (rect.width > 0) {
+      const dpr = window.devicePixelRatio || 1;
+      if (this._dspCanvas.width !== Math.round(rect.width * dpr)) {
+        this._dspCanvas.width  = Math.round(rect.width  * dpr);
+        this._dspCanvas.height = Math.round(rect.height * dpr);
+        this._dspCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
       }
     }
+    this._dspDraw();
   }
+
+  _dspDraw() {
+    const ctx = this._dspCtx;
+    if (!ctx || !this._dspCanvas) return;
+    const r = this._dspCanvas.getBoundingClientRect();
+    const w = r.width  || this._dspCanvas.width;
+    const h = r.height || this._dspCanvas.height;
+    const PAD = 34, MIN_DB = -15, MAX_DB = 15, FL = 20, FH = 20000;
+    const BG = '#1c1c1c', GRID = '#333', CURVE = '#22ba00', TEXT = '#888', PT = '#fff';
+
+    const fx = f => PAD + ((Math.log10(f) - Math.log10(FL)) / (Math.log10(FH) - Math.log10(FL))) * (w - 2*PAD);
+    const vy = v => PAD + ((MAX_DB - v) / (MAX_DB - MIN_DB)) * (h - 2*PAD);
+
+    ctx.fillStyle = BG; ctx.fillRect(0, 0, w, h);
+
+    if (!this._dspBands.length) {
+      ctx.fillStyle = TEXT; ctx.font = '11px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('No EQ entities found for prefix: ' + (this._activeId ? this._prefix(this._activeId) : '?'), w/2, h/2);
+      return;
+    }
+
+    // Horizontal dB grid lines
+    ctx.strokeStyle = GRID; ctx.lineWidth = 1;
+    [-12,-9,-6,-3,0,3,6,9,12].forEach(db => {
+      if (db < MIN_DB || db > MAX_DB) return;
+      const y = vy(db);
+      ctx.beginPath(); ctx.moveTo(PAD, y); ctx.lineTo(w - PAD, y); ctx.stroke();
+      ctx.fillStyle = TEXT; ctx.font = '9px sans-serif'; ctx.textAlign = 'right';
+      ctx.fillText((db > 0 ? '+' : '') + db, PAD - 4, y + 3);
+    });
+
+    // Vertical dotted lines at each band
+    ctx.setLineDash([2,3]);
+    this._dspBands.forEach(b => {
+      ctx.beginPath(); ctx.moveTo(fx(b.freq), PAD); ctx.lineTo(fx(b.freq), h - PAD); ctx.stroke();
+    });
+    ctx.setLineDash([]);
+
+    // Border
+    ctx.strokeStyle = GRID; ctx.lineWidth = 1;
+    ctx.strokeRect(PAD, PAD, w - 2*PAD, h - 2*PAD);
+
+    // Frequency labels
+    ctx.fillStyle = TEXT; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
+    this._dspBands.forEach((b, i) => {
+      if (i % 2 !== 0 && this._dspBands.length > 10) return;
+      const lbl = b.freq >= 1000 ? (b.freq/1000) + 'k' : String(b.freq);
+      ctx.fillText(lbl, fx(b.freq), h - PAD + 12);
+    });
+
+    // Bezier curve
+    if (this._dspBands.length >= 2) {
+      const pts = this._dspBands.map(b => ({ x: fx(b.freq), y: vy(b.value) }));
+      ctx.strokeStyle = CURVE; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 0; i < pts.length - 1; i++) {
+        const mid = { x: (pts[i].x + pts[i+1].x)/2, y: (pts[i].y + pts[i+1].y)/2 };
+        i === 0 ? ctx.lineTo(mid.x, mid.y) : ctx.quadraticCurveTo(pts[i].x, pts[i].y, mid.x, mid.y);
+      }
+      const l = pts.length - 1;
+      ctx.quadraticCurveTo(pts[l-1].x, pts[l-1].y, pts[l].x, pts[l].y);
+      ctx.stroke();
+    }
+
+    // Control points
+    this._dspBands.forEach(b => {
+      const x = fx(b.freq), y = vy(b.value);
+      ctx.fillStyle = CURVE + '44'; ctx.beginPath(); ctx.arc(x, y, 7, 0, 2*Math.PI); ctx.fill();
+      ctx.fillStyle = PT;           ctx.beginPath(); ctx.arc(x, y, 4, 0, 2*Math.PI); ctx.fill();
+      ctx.strokeStyle = CURVE; ctx.lineWidth = 1.5; ctx.stroke();
+    });
+  }
+
+  _dspPtrPos(e) {
+    const r = this._dspCanvas.getBoundingClientRect();
+    const t = e.touches ? e.touches[0] : e;
+    return { x: t.clientX - r.left, y: t.clientY - r.top };
+  }
+
+  _dspNearest(x, y) {
+    const PAD = 34, FL = 20, FH = 20000, MIN_DB = -15, MAX_DB = 15;
+    const r = this._dspCanvas.getBoundingClientRect();
+    const w = r.width, h = r.height;
+    const fx = f => PAD + ((Math.log10(f) - Math.log10(FL)) / (Math.log10(FH) - Math.log10(FL))) * (w - 2*PAD);
+    const vy = v => PAD + ((MAX_DB - v) / (MAX_DB - MIN_DB)) * (h - 2*PAD);
+    let best = -1, bestD = 28;
+    this._dspBands.forEach((b, i) => {
+      const d = Math.hypot(x - fx(b.freq), y - vy(b.value));
+      if (d < bestD) { bestD = d; best = i; }
+    });
+    return best;
+  }
+
+  _dspSetY(idx, y) {
+    const PAD = 34, MIN_DB = -15, MAX_DB = 15;
+    const h = this._dspCanvas.getBoundingClientRect().height;
+    const val = Math.round(Math.max(MIN_DB, Math.min(MAX_DB,
+      MAX_DB - ((y - PAD) / (h - 2*PAD)) * (MAX_DB - MIN_DB))) * 2) / 2;
+    this._dspBands[idx].value = val;
+    this._dspDraw();
+    this._hass?.callService('number', 'set_value', { entity_id: this._dspBands[idx].entityId, value: val });
+  }
+
+  _dspPtrDown(e) {
+    e.preventDefault();
+    if (!this._dspEditMode) return;
+    const p = this._dspPtrPos(e);
+    const idx = this._dspNearest(p.x, p.y);
+    if (idx !== -1) { this._dspDragging = idx; this._dspSetY(idx, p.y); }
+  }
+
+  _dspPtrMove(e) {
+    if (this._dspDragging === null) return;
+    e.preventDefault();
+    this._dspSetY(this._dspDragging, this._dspPtrPos(e).y);
+  }
+
+  _dspPtrUp() { this._dspDragging = null; }
 
   _updateVolSlider(color) {
     // Called after async color extraction to update slider gradient if color changed
