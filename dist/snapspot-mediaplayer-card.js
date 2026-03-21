@@ -315,10 +315,6 @@
                 <div class="dsp-toggle" id="dspHwEq"></div>
               </div>
               <div class="dsp-sw-wrap">
-                <span class="dsp-sw-label">SW EQ</span>
-                <div class="dsp-toggle" id="dspSwEq"></div>
-              </div>
-              <div class="dsp-sw-wrap">
                 <span class="dsp-sw-label">Edit</span>
                 <div class="dsp-toggle" id="dspEdit"></div>
               </div>
@@ -610,17 +606,27 @@
 
   // ── DSP / EQ integrated canvas ────────────────────────────────────────────
 
-  // Scan hass.states dynamically — finds EQ bands regardless of padding chars in the entity ID
-  // (HA slugifies friendly names, so "EQ ---25Hz" → _eq_25hz, "EQ --100Hz" → _eq_100hz etc.)
+  // Scan hass.states dynamically — finds EQ band entities regardless of slug padding.
+  // HA slugifies friendly names: "EQ ---20Hz" → _eq_20hz, "EQ -1.25kHz" → _eq_1_25khz etc.
+  // Handles three forms: plain hz (e.g. _eq_800hz), whole khz (e.g. _eq_2khz),
+  // decimal khz with underscore as separator (e.g. _eq_1_25khz = 1250 Hz).
   _dspScanBands(prefix) {
     if (!this._hass) return [];
+    const pfx = `number.${prefix}_eq_`;
     return Object.keys(this._hass.states)
-      .filter(eid => eid.startsWith(`number.${prefix}_eq_`) && /\d+hz?$/i.test(eid))
+      .filter(eid => eid.startsWith(pfx))
       .map(eid => {
-        const m = eid.match(/(\d+)hz?$/i);
-        if (!m) return null;
+        const seg = eid.slice(pfx.length); // e.g. "20hz", "800hz", "1_25khz", "2khz"
+        let freq = null;
+        const mdk = seg.match(/^(\d+)_(\d+)khz$/i);   // decimal kHz: 1_25khz → 1250
+        const mwk = seg.match(/^(\d+)khz$/i);          // whole kHz:   2khz   → 2000
+        const mhz = seg.match(/^(\d+)hz$/i);           // plain Hz:    800hz  → 800
+        if      (mdk) freq = Math.round(parseFloat(mdk[1] + '.' + mdk[2]) * 1000);
+        else if (mwk) freq = parseInt(mwk[1], 10) * 1000;
+        else if (mhz) freq = parseInt(mhz[1], 10);
+        if (!freq) return null;
         const st = this._hass.states[eid];
-        return { entityId: eid, freq: parseInt(m[1], 10), value: parseFloat(st.state) || 0 };
+        return { entityId: eid, freq, value: parseFloat(st.state) || 0 };
       })
       .filter(Boolean)
       .sort((a, b) => a.freq - b.freq);
@@ -647,28 +653,28 @@
       canvas.style.cursor = this._dspEditMode ? 'pointer' : 'default';
     });
 
-    this.shadowRoot.querySelector('#dspSwEq')?.addEventListener('click', () => {
-      if (!this._hass || !this._activeId) return;
-      const eid = `switch.${this._prefix(this._activeId)}_software_eq`;
-      if (this._hass.states[eid]) this._hass.callService('homeassistant', 'toggle', { entity_id: eid });
-    });
-
     this.shadowRoot.querySelector('#dspDac')?.addEventListener('click', () => {
       if (!this._hass || !this._activeId) return;
       const eid = `switch.${this._prefix(this._activeId)}_dac`;
       if (this._hass.states[eid]) this._hass.callService('homeassistant', 'toggle', { entity_id: eid });
     });
 
+    // Unified DSP toggle — auto-detects HW (select._dsp) or SW (switch._software_eq)
     this.shadowRoot.querySelector('#dspHwEq')?.addEventListener('click', () => {
       if (!this._hass || !this._activeId) return;
-      const eid = `select.${this._prefix(this._activeId)}_dsp`;
-      const st = this._hass.states[eid];
-      if (!st) return;
-      const isOn = st.state && st.state !== 'Disabled' && st.state !== 'unavailable' && st.state !== 'unknown';
-      this._hass.callService('select', 'select_option', {
-        entity_id: eid,
-        option: isOn ? 'Disabled' : (st.attributes?.options?.find(o => o !== 'Disabled') || st.state),
-      });
+      const pr     = this._prefix(this._activeId);
+      const selEid = `select.${pr}_dsp`;
+      const swEid  = `switch.${pr}_software_eq`;
+      if (this._hass.states[selEid]) {
+        const st  = this._hass.states[selEid];
+        const isOn = st.state && st.state !== 'Disabled' && st.state !== 'unavailable' && st.state !== 'unknown';
+        this._hass.callService('select', 'select_option', {
+          entity_id: selEid,
+          option: isOn ? 'Disabled' : (st.attributes?.options?.find(o => o !== 'Disabled') || st.state),
+        });
+      } else if (this._hass.states[swEid]) {
+        this._hass.callService('homeassistant', 'toggle', { entity_id: swEid });
+      }
     });
   }
 
@@ -685,16 +691,17 @@
     const prefix  = this._prefix(this._activeId);
     this._dspBands = this._dspScanBands(prefix);
 
-    // Toggle states for header switches
-    const swEqSt = this._hass.states[`switch.${prefix}_software_eq`];
-    this.shadowRoot.querySelector('#dspSwEq')?.classList.toggle('on', swEqSt?.state === 'on');
-
+    // Toggle states for header
     const dacSt = this._hass.states[`switch.${prefix}_dac`];
     this.shadowRoot.querySelector('#dspDac')?.classList.toggle('on', dacSt?.state === 'on');
 
-    const hwEqSt = this._hass.states[`select.${prefix}_dsp`];
-    const hwEqOn = hwEqSt && hwEqSt.state && hwEqSt.state !== 'Disabled' && hwEqSt.state !== 'unavailable' && hwEqSt.state !== 'unknown';
-    this.shadowRoot.querySelector('#dspHwEq')?.classList.toggle('on', !!hwEqOn);
+    // Unified DSP toggle — HW select takes priority, fall back to SW switch
+    const hwSt  = this._hass.states[`select.${prefix}_dsp`];
+    const swSt  = this._hass.states[`switch.${prefix}_software_eq`];
+    let dspOn = false;
+    if (hwSt)  dspOn = hwSt.state && hwSt.state !== 'Disabled' && hwSt.state !== 'unavailable' && hwSt.state !== 'unknown';
+    else if (swSt) dspOn = swSt.state === 'on';
+    this.shadowRoot.querySelector('#dspHwEq')?.classList.toggle('on', !!dspOn);
 
     // Size canvas to pixel dimensions (run every update — cheap if already right)
     const rect = this._dspCanvas.getBoundingClientRect();
