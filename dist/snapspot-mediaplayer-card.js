@@ -34,11 +34,6 @@
           selector: { entity: { domain: ['media_player'] } },
         },
         {
-          name: 'show_dsp',
-          required: false,
-          selector: { boolean: {} },
-        },
-        {
           name: 'title',
           required: false,
           selector: { text: {} },
@@ -46,28 +41,25 @@
         {
           name: 'source_switch',
           required: false,
-          selector: {
-            select: {
-              options: [
-                { value: 'auto',   label: 'Auto – follow the playing source' },
-                { value: 'manual', label: 'Manual – show switcher bar' },
-              ],
-              mode: 'list',
-            },
-          },
+          selector: { boolean: {} },
+        },
+        {
+          name: 'show_dsp',
+          required: false,
+          selector: { boolean: {} },
         },
       ],
       computeLabel: (s) => ({
         media_player:  'Media Player (Snapcast or Spotify)',
-        show_dsp:      'Show DSP / EQ section',
         title:         'Card title (optional)',
-        source_switch: 'Source switching',
+        source_switch: 'Manual source switcher (show Snapcast / Spotify bar)',
+        show_dsp:      'Show DSP / EQ section',
       }[s.name] || s.name),
     };
   }
 
   static getStubConfig() {
-    return { media_player: '', show_dsp: false, title: '', source_switch: 'auto' };
+    return { media_player: '', title: '', source_switch: false, show_dsp: false };
   }
 
   _prefix(id) {
@@ -108,7 +100,7 @@
       this._activeId = this._config.media_player;
     }
     // Auto mode: follow whichever companion is playing
-    if (this._activeId && this._config?.source_switch !== 'manual') {
+    if (this._activeId && !this._config?.source_switch) {
       const companionId = this._companionId(this._activeId);
       if (companionId) {
         const companion = hass.states[companionId];
@@ -532,7 +524,7 @@
     const companionExists = companionId && !!this._state(companionId);
     const companionSrc    = source === 'snapcast' ? 'spotify' : 'snapcast';
 
-    const showManualBar = companionExists && this._config?.source_switch === 'manual';
+    const showManualBar = companionExists && !!this._config?.source_switch;
     const companionHtml = showManualBar
       ? '<div class="companion-bar">'
         + '<button class="comp-btn active ' + source + '" id="btnSelf">' + source + '</button>'
