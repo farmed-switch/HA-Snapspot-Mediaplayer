@@ -300,6 +300,14 @@
             <span class="dsp-title">Equalizer</span>
             <div class="dsp-switches">
               <div class="dsp-sw-wrap">
+                <span class="dsp-sw-label">DAC</span>
+                <div class="dsp-toggle" id="dspDac"></div>
+              </div>
+              <div class="dsp-sw-wrap">
+                <span class="dsp-sw-label">DSP</span>
+                <div class="dsp-toggle" id="dspHwEq"></div>
+              </div>
+              <div class="dsp-sw-wrap">
                 <span class="dsp-sw-label">SW EQ</span>
                 <div class="dsp-toggle" id="dspSwEq"></div>
               </div>
@@ -622,6 +630,24 @@
       const eid = `switch.${this._prefix(this._activeId)}_software_eq`;
       if (this._hass.states[eid]) this._hass.callService('homeassistant', 'toggle', { entity_id: eid });
     });
+
+    this.shadowRoot.querySelector('#dspDac')?.addEventListener('click', () => {
+      if (!this._hass || !this._activeId) return;
+      const eid = `switch.${this._prefix(this._activeId)}_dac`;
+      if (this._hass.states[eid]) this._hass.callService('homeassistant', 'toggle', { entity_id: eid });
+    });
+
+    this.shadowRoot.querySelector('#dspHwEq')?.addEventListener('click', () => {
+      if (!this._hass || !this._activeId) return;
+      const eid = `select.${this._prefix(this._activeId)}_dsp`;
+      const st = this._hass.states[eid];
+      if (!st) return;
+      const isOn = st.state && st.state !== 'Disabled' && st.state !== 'unavailable' && st.state !== 'unknown';
+      this._hass.callService('select', 'select_option', {
+        entity_id: eid,
+        option: isOn ? 'Disabled' : (st.attributes?.options?.find(o => o !== 'Disabled') || st.state),
+      });
+    });
   }
 
   _dspUpdate() {
@@ -641,9 +667,16 @@
       return st ? { entityId: eid, value: parseFloat(st.state) || 0, freq: freqs[i] } : null;
     }).filter(Boolean);
 
-    // SW EQ toggle state
+    // Toggle states for header switches
     const swEqSt = this._hass.states[`switch.${prefix}_software_eq`];
     this.shadowRoot.querySelector('#dspSwEq')?.classList.toggle('on', swEqSt?.state === 'on');
+
+    const dacSt = this._hass.states[`switch.${prefix}_dac`];
+    this.shadowRoot.querySelector('#dspDac')?.classList.toggle('on', dacSt?.state === 'on');
+
+    const hwEqSt = this._hass.states[`select.${prefix}_dsp`];
+    const hwEqOn = hwEqSt && hwEqSt.state && hwEqSt.state !== 'Disabled' && hwEqSt.state !== 'unavailable' && hwEqSt.state !== 'unknown';
+    this.shadowRoot.querySelector('#dspHwEq')?.classList.toggle('on', !!hwEqOn);
 
     // Size canvas to pixel dimensions (run every update — cheap if already right)
     const rect = this._dspCanvas.getBoundingClientRect();
