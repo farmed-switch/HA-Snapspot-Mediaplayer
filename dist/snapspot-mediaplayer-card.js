@@ -130,7 +130,10 @@
     this.shadowRoot.innerHTML = `
       <style>
         :host { display: block; }
-        ha-card { overflow: hidden; position: relative; min-height: 200px; }
+        ha-card { overflow: hidden; position: relative; }
+
+        /* Part 1 — player area wrapper (constrains bg layers so they don't bleed into Part 2) */
+        #playerWrap { position: relative; overflow: hidden; }
 
         /* Background layers */
         .bg-color {
@@ -291,10 +294,14 @@
         .dsp-canvas-wrap canvas { width: 100%; height: 100%; display: block; }
       </style>
       <ha-card>
-        <div class="bg-color" id="bgColor"></div>
-        <div class="bg-image" id="bgImage"></div>
-        <div class="bg-gradient" id="bgGradient"></div>
-        <div id="root"></div>
+        <!-- Part 1: player area — bg layers are contained here and don't bleed into Part 2 -->
+        <div id="playerWrap">
+          <div class="bg-color" id="bgColor"></div>
+          <div class="bg-image" id="bgImage"></div>
+          <div class="bg-gradient" id="bgGradient"></div>
+          <div id="root"></div>
+        </div>
+        <!-- Part 2: DSP / EQ section -->
         <div id="dspSection">
           <div class="dsp-header">
             <span class="dsp-title">Equalizer</span>
@@ -431,15 +438,17 @@
 
   _attachObserver() {
     if (this._resizeObs) return;
-    const card = this.shadowRoot && this.shadowRoot.querySelector('ha-card');
-    if (!card) return;
+    // Observe #playerWrap (Part 1 only) so _cardH reflects the player height,
+    // not the total card height which includes the DSP section (Part 2).
+    const wrap = this.shadowRoot && this.shadowRoot.querySelector('#playerWrap');
+    if (!wrap) return;
     this._resizeObs = new ResizeObserver(() => {
-      if (card.offsetHeight) {
-        this._cardH = card.offsetHeight;
+      if (wrap.offsetHeight) {
+        this._cardH = wrap.offsetHeight;
         this._applyBackground(this._lastArt, this._bgColor);
       }
     });
-    this._resizeObs.observe(card);
+    this._resizeObs.observe(wrap);
   }
 
   _update() {
@@ -601,8 +610,21 @@
 
   // ── DSP / EQ integrated canvas ────────────────────────────────────────────
 
-  _dspFreqs()    { return [25,40,63,100,160,250,400,630,1000,1600,2500,4000,6300,10000,16000]; }
-  _dspEntityIds(prefix) { return this._dspFreqs().map((_,i) => `number.${prefix}_eq_band_${i}`); }
+  // Scan hass.states dynamically — finds EQ bands regardless of padding chars in the entity ID
+  // (HA slugifies friendly names, so "EQ ---25Hz" → _eq_25hz, "EQ --100Hz" → _eq_100hz etc.)
+  _dspScanBands(prefix) {
+    if (!this._hass) return [];
+    return Object.keys(this._hass.states)
+      .filter(eid => eid.startsWith(`number.${prefix}_eq_`) && /\d+hz?$/i.test(eid))
+      .map(eid => {
+        const m = eid.match(/(\d+)hz?$/i);
+        if (!m) return null;
+        const st = this._hass.states[eid];
+        return { entityId: eid, freq: parseInt(m[1], 10), value: parseFloat(st.state) || 0 };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.freq - b.freq);
+  }
 
   _dspInit() {
     // Idempotent — run once per render cycle
@@ -661,11 +683,7 @@
     if (!this._dspCanvas) return;
 
     const prefix  = this._prefix(this._activeId);
-    const freqs   = this._dspFreqs();
-    this._dspBands = this._dspEntityIds(prefix).map((eid, i) => {
-      const st = this._hass.states[eid];
-      return st ? { entityId: eid, value: parseFloat(st.state) || 0, freq: freqs[i] } : null;
-    }).filter(Boolean);
+    this._dspBands = this._dspScanBands(prefix);
 
     // Toggle states for header switches
     const swEqSt = this._hass.states[`switch.${prefix}_software_eq`];
