@@ -48,18 +48,37 @@
           required: false,
           selector: { boolean: {} },
         },
+        {
+          name: 'dac_switch',
+          required: false,
+          selector: { entity: { domain: ['switch'] } },
+        },
       ],
       computeLabel: (s) => ({
         media_player:  'Media Player (Snapcast or Spotify)',
         title:         'Card title (optional)',
         source_switch: 'Manual source switcher (show Snapcast / Spotify bar)',
         show_dsp:      'Show DSP / EQ section',
+        dac_switch:    'DAC switch entity (optional override)',
       }[s.name] || s.name),
     };
   }
 
   static getStubConfig() {
-    return { media_player: '', title: '', source_switch: false, show_dsp: false };
+    return { media_player: '', title: '', source_switch: false, show_dsp: false, dac_switch: '' };
+  }
+
+  // Resolve DAC entity: explicit config > auto-detect _dac > auto-detect _enable_dac > null
+  _dacEntityId() {
+    if (!this._hass || !this._activeId) return null;
+    if (this._config?.dac_switch && this._hass.states[this._config.dac_switch])
+      return this._config.dac_switch;
+    const pr = this._prefix(this._activeId);
+    for (const suffix of ['_dac', '_enable_dac']) {
+      const eid = `switch.${pr}${suffix}`;
+      if (this._hass.states[eid]) return eid;
+    }
+    return null;
   }
 
   _prefix(id) {
@@ -651,8 +670,8 @@
 
     this.shadowRoot.querySelector('#dspDac')?.addEventListener('click', () => {
       if (!this._hass || !this._activeId) return;
-      const eid = `switch.${this._prefix(this._activeId)}_dac`;
-      if (this._hass.states[eid]) this._hass.callService('homeassistant', 'toggle', { entity_id: eid });
+      const eid = this._dacEntityId();
+      if (eid) this._hass.callService('homeassistant', 'toggle', { entity_id: eid });
     });
 
     // Unified DSP toggle — auto-detects HW (select._dsp) or SW (switch._software_eq)
@@ -692,8 +711,17 @@
     this._dspBands = this._dspScanBands(prefix);
 
     // Toggle states for header
-    const dacSt = this._hass.states[`switch.${prefix}_dac`];
-    this.shadowRoot.querySelector('#dspDac')?.classList.toggle('on', dacSt?.state === 'on');
+    const dacEid = this._dacEntityId();
+    const dacEl  = this.shadowRoot.querySelector('#dspDac');
+    if (dacEl) {
+      const dacWrap = dacEl.closest('.dsp-sw-wrap');
+      if (dacEid) {
+        dacWrap && (dacWrap.style.display = '');
+        dacEl.classList.toggle('on', this._hass.states[dacEid]?.state === 'on');
+      } else {
+        dacWrap && (dacWrap.style.display = 'none'); // hide if no entity found
+      }
+    }
 
     // Unified DSP toggle — HW select takes priority, fall back to SW switch
     const hwSt  = this._hass.states[`select.${prefix}_dsp`];
