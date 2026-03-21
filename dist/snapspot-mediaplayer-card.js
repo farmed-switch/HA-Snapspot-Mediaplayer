@@ -9,6 +9,7 @@
     this._lastArt   = null;
     this._cardH     = 200;
     this._resizeObs = null;
+    this._dspCard   = null;
   }
 
   connectedCallback() {
@@ -91,6 +92,7 @@
   setConfig(config) {
     this._config   = config;
     this._activeId = config.media_player || null;
+    this._dspCard  = null;   // reset so it is recreated on next _update()
     this._render();
   }
 
@@ -244,12 +246,23 @@
           padding: 24px 16px; text-align: center; font-size: 13px;
           color: var(--secondary-text-color,#888); position: relative; z-index: 1;
         }
+
+        /* DSP section separator */
+        #dspSection {
+          position: relative; z-index: 1;
+          border-top: 1px solid rgba(128,128,128,0.2);
+        }
+        #dspSection:empty { display: none; }
+        #dspSection dsp-controller-card {
+          display: block;
+        }
       </style>
       <ha-card>
         <div class="bg-color" id="bgColor"></div>
         <div class="bg-image" id="bgImage"></div>
         <div class="bg-gradient" id="bgGradient"></div>
         <div id="root"></div>
+        <div id="dspSection"></div>
       </ha-card>
     `;
     this._attachObserver();
@@ -525,6 +538,35 @@
         this._activeId = companionId;
         this._update();
       });
+    }
+
+    // ── DSP section ───────────────────────────────────────────────────────
+    const dspSection = this.shadowRoot.querySelector('#dspSection');
+    if (dspSection) {
+      if (this._config?.show_dsp) {
+        if (!this._dspCard) {
+          // Instantiate dsp-controller-card — entities wired in next step.
+          // Falls back gracefully (empty curve) if not yet registered.
+          const el = document.createElement('dsp-controller-card');
+          try {
+            el.setConfig({
+              title: 'EQ',
+              entities: [],
+              height: 220,
+              min: -15,
+              max: 15,
+            });
+          } catch(e) { /* card not loaded yet */ }
+          dspSection.appendChild(el);
+          this._dspCard = el;
+        }
+        this._dspCard.hass = this._hass;
+      } else {
+        if (this._dspCard) {
+          dspSection.innerHTML = '';
+          this._dspCard = null;
+        }
+      }
     }
   }
 
