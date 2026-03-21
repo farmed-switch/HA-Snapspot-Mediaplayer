@@ -80,7 +80,6 @@ class SnapspotMediaplayerCard extends HTMLElement {
 
   // ── Card lifecycle ───────────────────────────────────────────────────────
   setConfig(config) {
-    if (!config.media_player) throw new Error('Select a media_player entity.');
     this._config = config;
     this._render();
   }
@@ -296,6 +295,11 @@ class SnapspotMediaplayerCard extends HTMLElement {
     };
 
     // ── Build HTML ──────────────────────────────────────────────────────────
+    if (!mpId) {
+      root.innerHTML = `<div class="idle-wrap">Select a media player entity in the card configuration.</div>`;
+      return;
+    }
+
     if (!mp) {
       root.innerHTML = `<div class="idle-wrap">Entity not found:<br><small>${mpId}</small></div>`;
       return;
