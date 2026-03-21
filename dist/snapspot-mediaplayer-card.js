@@ -334,13 +334,23 @@
     const bgGrad  = this.shadowRoot.querySelector('#bgGradient');
     if (!bgColor) return;
     const hasArt = artUrl && artUrl !== 'unavailable' && artUrl !== 'unknown';
-    const col = color || '#1a1a1a';
+    const col = color || 'rgb(26,26,26)';
     if (hasArt) {
+      // Extract r,g,b so we can build valid rgba() gradient stops.
+      // col is always 'rgb(r,g,b)' from _extractArtColor, never hex, but handle both.
+      let r = 26, g = 26, b = 26;
+      const m = col.match(/rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+      if (m) { r = +m[1]; g = +m[2]; b = +m[3]; }
+      // Gradient: dominant color → transparent (left→right), same width as artwork.
+      // Mirrors the HA hui-media-control-card color-gradient approach exactly.
+      const cFull  = `rgba(${r},${g},${b},1)`;
+      const cMid   = `rgba(${r},${g},${b},0.5)`;
+      const cNone  = `rgba(${r},${g},${b},0)`;
       bgColor.style.background       = col;
-      bgImage.style.backgroundImage  = 'url(' + artUrl + ')';
+      bgImage.style.backgroundImage  = `url(${artUrl})`;
       bgImage.style.width            = this._cardH + 'px';
       bgImage.style.opacity          = '1';
-      bgGrad.style.background        = 'linear-gradient(to right, ' + col + ' 0%, ' + col + 'cc 40%, ' + col + '00 100%)';
+      bgGrad.style.background        = `linear-gradient(to right, ${cFull} 0%, ${cMid} 55%, ${cNone} 100%)`;
       bgGrad.style.width             = this._cardH + 'px';
       bgGrad.style.opacity           = '1';
     } else {
