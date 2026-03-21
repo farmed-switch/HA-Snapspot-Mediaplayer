@@ -1,0 +1,27 @@
+{
+  "name": "snapspot-mediaplayer-card",
+  "version": "1.0.0",
+  "description": "Full media player + DSP control card for Snapspot ESPHome audio devices",
+  "main": "dist/snapspot-mediaplayer-card.js",
+  "scripts": {
+    "build": "echo 'No build step required - vanilla JS'"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/farmed-switch/HA-Snapspot-Mediaplayer.git"
+  },
+  "keywords": [
+    "home-assistant",
+    "lovelace",
+    "custom-card",
+    "media-player",
+    "snapspot",
+    "snapcast",
+    "spotify",
+    "esphome",
+    "dsp",
+    "equalizer"
+  ],
+  "author": "farmed-switch",
+  "license": "MIT"
+}

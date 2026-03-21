@@ -1,0 +1,7 @@
+{
+  "name": "Snapspot Media Player Card",
+  "content_in_root": false,
+  "filename": "snapspot-mediaplayer-card.js",
+  "render_readme": true,
+  "homeassistant": "2024.1.0"
+}
