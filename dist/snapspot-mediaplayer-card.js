@@ -74,12 +74,25 @@
     // 1. Explicit config override always wins
     if (this._config?.dac_switch && this._hass.states[this._config.dac_switch])
       return this._config.dac_switch;
-    // 2. Scan all switch entities that start with switch.{prefix}_ and contain 'dac'
-    //    — same approach as _dspScanBands so long/doubled prefixes are handled correctly
-    const pfx = `switch.${this._prefix(this._activeId)}_`;
-    const hit = Object.keys(this._hass.states)
+    const pr  = this._prefix(this._activeId);
+    // 2. Forward scan: entity starts with full (possibly doubled) prefix + contains 'dac'
+    const pfx = `switch.${pr}_`;
+    const fwd = Object.keys(this._hass.states)
       .find(eid => eid.startsWith(pfx) && /dac/i.test(eid));
-    return hit || null;
+    if (fwd) return fwd;
+    // 3. Reverse scan: handles "doubled prefix" case where media_player entity ID has
+    //    {base}_{base}_snapcast but the switch only has {base}_dac / {base}_enable_dac.
+    //    Strip the dac suffix from each candidate switch and check if our full prefix
+    //    starts with that stem — pick the longest stem (most specific).
+    const rev = Object.keys(this._hass.states)
+      .filter(eid => /^switch\..+dac/i.test(eid))
+      .map(eid => {
+        const stem = eid.replace(/^switch\./, '').replace(/_enable_dac$|_dac$/i, '');
+        return (pr === stem || pr.startsWith(stem + '_')) ? { eid, len: stem.length } : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.len - a.len)[0]?.eid;
+    return rev || null;
   }
 
   _prefix(id) {
