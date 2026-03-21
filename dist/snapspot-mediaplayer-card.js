@@ -25,17 +25,31 @@
           required: false,
           selector: { text: {} },
         },
+        {
+          name: 'source_switch',
+          required: false,
+          selector: {
+            select: {
+              options: [
+                { value: 'auto',   label: 'Auto – follow the playing source' },
+                { value: 'manual', label: 'Manual – show switcher bar' },
+              ],
+              mode: 'list',
+            },
+          },
+        },
       ],
       computeLabel: (s) => ({
-        media_player: 'Media Player (Snapcast or Spotify)',
-        show_dsp:     'Show DSP / EQ section',
-        title:        'Card title (optional)',
+        media_player:  'Media Player (Snapcast or Spotify)',
+        show_dsp:      'Show DSP / EQ section',
+        title:         'Card title (optional)',
+        source_switch: 'Source switching',
       }[s.name] || s.name),
     };
   }
 
   static getStubConfig() {
-    return { media_player: '', show_dsp: false, title: '' };
+    return { media_player: '', show_dsp: false, title: '', source_switch: 'auto' };
   }
 
   _prefix(id) {
@@ -72,6 +86,20 @@
     this._hass = hass;
     if (!this._activeId && this._config?.media_player) {
       this._activeId = this._config.media_player;
+    }
+    // Auto mode: follow whichever companion is playing
+    if (this._activeId && this._config?.source_switch !== 'manual') {
+      const companionId = this._companionId(this._activeId);
+      if (companionId) {
+        const companion = hass.states[companionId];
+        const current   = hass.states[this._activeId];
+        if (companion?.state === 'playing' && current?.state !== 'playing') {
+          this._activeId = companionId;
+        } else if (current?.state !== 'playing' && companion?.state !== 'playing') {
+          // Neither playing – stay on configured default
+          this._activeId = this._config.media_player || this._activeId;
+        }
+      }
     }
     this._update();
   }
@@ -307,7 +335,8 @@
     const companionExists = companionId && !!this._state(companionId);
     const companionSrc    = source === 'snapcast' ? 'spotify' : 'snapcast';
 
-    const companionHtml = companionExists
+    const showManualBar = companionExists && this._config?.source_switch === 'manual';
+    const companionHtml = showManualBar
       ? '<div class="companion-bar">'
         + '<button class="comp-btn active ' + source + '" id="btnSelf">' + source + '</button>'
         + '<div class="comp-divider"></div>'
@@ -368,7 +397,7 @@
         this._hass.callService('media_player', 'volume_set', { entity_id: activeId, volume_level: parseInt(e.target.value, 10) / 100 }));
     }
 
-    if (companionExists) {
+    if (showManualBar) {
       root.querySelector('#btnOther')?.addEventListener('click', () => {
         this._activeId = companionId;
         this._update();
